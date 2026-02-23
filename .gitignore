@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Debug/test files
+test-*.js
+debug-*.js
+create-test-data*.js
+fix-workflow-json.js
+test-data.json
+test-output.json
+
+# n8n exported workflows (keep only the generated one)
+Seminar Sync Automation*.json
+!seminar-broadcast-workflow.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
