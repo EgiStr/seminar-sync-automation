@@ -1,1 +1,1 @@
-event_hash_id,seminar_type,nim,nama,tanggal,jam,start_datetime,calendar_link,processed_at
+event_hash_id,program,seminar_type,nim,nama,judul,hari,tanggal,jam,ruangan,pembimbing1,pembimbing2,pembimbing3,penguji1,penguji2,link,start_datetime,end_datetime,calendar_link,processed_at

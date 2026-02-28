@@ -1,6 +1,12 @@
 // =============================================================
-// Build the plugin-based seminar workflow JSON
-// Usage: node build-workflow.js
+// Build the Farmasi seminar workflow JSON (SEMPRO & SEMHAS)
+// Usage: node build-workflow-farmasi.js
+// =============================================================
+// Farmasi spreadsheet differences from Sains Data:
+//   - Combined "Hari, tanggal bulan tahun" in one jadwal column
+//   - No link column (offline/luring seminars)
+//   - SEMHAS has Pembimbing 3 column
+//   - SEMPRO sometimes has multiline date+time in jadwal cell
 // =============================================================
 const fs = require('fs');
 const path = require('path');
@@ -9,39 +15,40 @@ const path = require('path');
 const configSourcesCode = [
   '',
   '// ============================',
-  '// PLUGIN CONFIG — Edit this to add/remove seminar types',
+  '// PLUGIN CONFIG — Farmasi SEMPRO & SEMHAS',
+  '// Verify gid mapping matches your spreadsheet tabs!',
   '// ============================',
   '',
   'return [',
   '  { json: {',
   '    type: "Seminar Hasil",',
-  '    sheetUrl: "https://docs.google.com/spreadsheets/d/109HxAVZofGjyDlz-O8pfK4iqYPDXyX7H/export?format=csv&gid=1341055501",',
+  '    sheetUrl: "https://docs.google.com/spreadsheets/d/1hpWSt0Pg-f97Hs3qa1SmG7umlZLQFtHEY0qTQ7PWmmw/export?format=csv&gid=1349278172",',
   '    columns: {',
-  '      no: 0, nim: 1, nama: 2,',
-  '      pembimbing1: 3, pembimbing2: 4,',
-  '      penguji1: 5, penguji2: 6,',
-  '      judul: 7, tanggal: 8, hari: 9,',
-  '      jam: 10, link: 11, ruangan: 12',
+  '      no: 0, nama: 1, nim: 2, kk: 3, judul: 4,',
+  '      pembimbing1: 5, pembimbing2: 6, pembimbing3: 7,',
+  '      penguji1: 8, penguji2: 9,',
+  '      jadwal: 10, jam: 11, ruangan: 12,',
+  '      link: -1',
   '    }',
   '  }},',
   '  { json: {',
   '    type: "Seminar Proposal",',
-  '    sheetUrl: "https://docs.google.com/spreadsheets/d/109HxAVZofGjyDlz-O8pfK4iqYPDXyX7H/export?format=csv&gid=1605122729",',
+  '    sheetUrl: "https://docs.google.com/spreadsheets/d/1hpWSt0Pg-f97Hs3qa1SmG7umlZLQFtHEY0qTQ7PWmmw/export?format=csv&gid=2108042402",',
   '    columns: {',
-  '      no: 0, nim: 1, nama: 2,',
-  '      pembimbing1: 3, pembimbing2: 4,',
-  '      penguji1: 5, penguji2: -1,',
-  '      judul: 6, tanggal: 7, hari: 8,',
-  '      jam: 9, link: 10, ruangan: 11',
+  '      no: 0, nama: 1, nim: 2, kk: 3, judul: 4,',
+  '      pembimbing1: 5, pembimbing2: 6, pembimbing3: -1,',
+  '      penguji1: 7, penguji2: 8,',
+  '      jadwal: 9, jam: 10, ruangan: 11,',
+  '      link: -1',
   '    }',
   '  }}',
   '];',
 ].join('\n');
 
-// ---- JS code for Parse & Transform node ----
+// ---- JS code for Parse & Transform node (Farmasi version) ----
 const parseTransformCode = [
-  '// CSV Parse + Transform + Validate + Hash  (v3 — plugin system)',
-  '// Config-driven: reads column mapping from Config Sources node.',
+  '// CSV Parse + Transform + Validate + Hash  (Farmasi version)',
+  '// Handles: combined jadwal field, multiline date+time, pembimbing3, no link',
   '',
   'const config = $(\'Loop Over Sources\').item.json;',
   'const col = config.columns;',
@@ -58,7 +65,7 @@ const parseTransformCode = [
   '  return \'evt_\' + h.toString(16).padStart(8, \'0\');',
   '}',
   '',
-  '// CSV Parser (handles quoted fields with commas)',
+  '// CSV Parser (handles quoted fields with commas and embedded newlines)',
   'function parseCsvToArrays(csvText) {',
   '  const lines = [];',
   '  let current = \'\';',
@@ -93,7 +100,7 @@ const parseTransformCode = [
   '  });',
   '}',
   '',
-  '// Month maps',
+  '// Month maps (Indonesian + English)',
   'const BULAN = {',
   '  \'januari\':0,\'februari\':1,\'maret\':2,\'april\':3,\'mei\':4,\'juni\':5,',
   '  \'juli\':6,\'agustus\':7,\'september\':8,\'oktober\':9,\'october\':9,',
@@ -104,6 +111,7 @@ const parseTransformCode = [
   '  \'jul\':6,\'aug\':7,\'sep\':8,\'oct\':9,\'nov\':10,\'dec\':11',
   '};',
   '',
+  '// Parse date string: "1 Juli 2024", "06 September 2024", "1-Jul-2024"',
   'function parseDate(s) {',
   '  if (!s) return null;',
   '  const t = s.trim();',
@@ -126,13 +134,14 @@ const parseTransformCode = [
   '  return null;',
   '}',
   '',
+  '// Parse time range: "10.00-11.00", "09.00 - 10.00", "15.00-16 00"',
   'function parseTimeRange(s) {',
   '  if (!s) return null;',
   '  const cleaned = s.replace(/\\s*(WIB|WITA|WIT)\\s*/gi, \'\').trim();',
   '  const norm = cleaned.replace(/[\\s,\\-]+$/, \'\');',
   '  const parts = norm.split(/\\s*-\\s*/);',
   '  const parse = t => {',
-  '    const m = t.trim().match(/^(\\d{1,2})[.:](\\d{2})$/);',
+  '    const m = t.trim().match(/^(\\d{1,2})[.:\\s](\\d{2})$/);',
   '    return m ? { h: parseInt(m[1]), m: parseInt(m[2]) } : null;',
   '  };',
   '  const start = parse(parts[0]);',
@@ -141,14 +150,37 @@ const parseTransformCode = [
   '    const end = parse(parts[1]);',
   '    if (end) return { sh: start.h, sm: start.m, eh: end.h, em: end.m };',
   '  }',
-  '  let eh = start.h + 2, em = start.m;',
+  '  let eh = start.h + 1, em = start.m;',
   '  if (eh >= 24) eh -= 24;',
   '  return { sh: start.h, sm: start.m, eh, em };',
+  '}',
+  '',
+  '// Parse combined jadwal field:',
+  '//   "Senin, 1 Juli 2024" → { hari, tanggal, embeddedJam: \'\' }',
+  '//   "Senin, 14 Oktober 2024\\n14.00-15.00" → { hari, tanggal, embeddedJam }',
+  'function parseJadwal(raw) {',
+  '  if (!raw) return { hari: \'\', tanggal: \'\', embeddedJam: \'\' };',
+  '  const lines = raw.split(\'\\n\');',
+  '  const dateLine = lines[0].trim();',
+  '  const embeddedJam = lines.length > 1 ? lines[1].trim() : \'\';',
+  '  const commaIdx = dateLine.indexOf(\',\');',
+  '  let hari = \'\';',
+  '  let tanggal = dateLine;',
+  '  if (commaIdx >= 0) {',
+  '    hari = dateLine.substring(0, commaIdx).trim();',
+  '    tanggal = dateLine.substring(commaIdx + 1).trim();',
+  '  }',
+  '  return { hari, tanggal, embeddedJam };',
   '}',
   '',
   'function toISO(y, mo, d, h, mi) {',
   '  const pad = n => String(n).padStart(2, \'0\');',
   '  return `${y}-${pad(mo+1)}-${pad(d)}T${pad(h)}:${pad(mi)}:00+07:00`;',
+  '}',
+  '',
+  '// Check if string looks like a time range (HH.MM-HH.MM)',
+  'function isTimeFormat(s) {',
+  '  return /\\d{1,2}[.:](\\d{2})/.test(s);',
   '}',
   '',
   '// ===== MAIN =====',
@@ -164,24 +196,57 @@ const parseTransformCode = [
   '  const c = allRows[i];',
   '  const firstCell = (c[0] || \'\').trim().toLowerCase();',
   '  if (c.length < 8) continue;',
+  '',
+  '  // Skip header/separator rows',
   '  if (firstCell.startsWith(\'semester\')) continue;',
   '  if (firstCell === \'no\' || firstCell === \'fy\') continue;',
+  '  if (firstCell.startsWith(\'januari\') || firstCell.startsWith(\'februari\') ||',
+  '      firstCell.startsWith(\'maret\') || firstCell.startsWith(\'april\') ||',
+  '      firstCell.startsWith(\'mei\') || firstCell.startsWith(\'juni\') ||',
+  '      firstCell.startsWith(\'juli\') || firstCell.startsWith(\'agustus\') ||',
+  '      firstCell.startsWith(\'september\') || firstCell.startsWith(\'oktober\') ||',
+  '      firstCell.startsWith(\'november\') || firstCell.startsWith(\'desember\')) continue;',
   '',
   '  const nim = (c[col.nim] || \'\').trim();',
   '  if (!nim || !/^\\d+$/.test(nim)) continue;',
   '',
   '  const nama        = (c[col.nama]        || \'\').trim();',
+  '  const kk          = col.kk >= 0 ? (c[col.kk] || \'\').trim() : \'\';',
   '  const pembimbing1 = (c[col.pembimbing1] || \'\').trim();',
   '  const pembimbing2 = (c[col.pembimbing2] || \'\').trim();',
+  '  const pembimbing3 = col.pembimbing3 >= 0 ? (c[col.pembimbing3] || \'\').trim() : \'\';',
   '  const penguji1    = (c[col.penguji1]    || \'\').trim();',
   '  const penguji2    = col.penguji2 >= 0 ? (c[col.penguji2] || \'\').trim() : \'\';',
   '  const judul       = (c[col.judul]       || \'\').trim();',
-  '  const tanggal     = (c[col.tanggal]     || \'\').trim();',
-  '  const hari        = (c[col.hari]        || \'\').trim();',
-  '  const jam         = (c[col.jam]         || \'\').trim();',
-  '  const link        = (c[col.link]        || \'\').trim();',
-  '  let   ruangan     = (c[col.ruangan]     || \'\').trim();',
+  '',
+  '  // Parse combined jadwal field ("Hari, tanggal bulan tahun")',
+  '  const jadwalRaw = (c[col.jadwal] || \'\').trim();',
+  '  const jadwalParsed = parseJadwal(jadwalRaw);',
+  '  const hari = jadwalParsed.hari;',
+  '  const tanggal = jadwalParsed.tanggal;',
+  '',
+  '  // Smart jam/ruangan extraction:',
+  '  //   If jam column has a valid time → use it normally',
+  '  //   If jam column is NOT a time (e.g. multiline jadwal shifted columns)',
+  '  //     → use embedded time from jadwal, treat jam column value as ruangan',
+  '  const jamRaw = (c[col.jam] || \'\').trim();',
+  '  const jamIsTime = isTimeFormat(jamRaw);',
+  '  let jam, ruangan;',
+  '',
+  '  if (jamIsTime) {',
+  '    jam = jamRaw;',
+  '    ruangan = (c[col.ruangan] || \'\').trim();',
+  '  } else if (jadwalParsed.embeddedJam) {',
+  '    // Multiline jadwal: time embedded in jadwal cell, jam column has ruangan',
+  '    jam = jadwalParsed.embeddedJam;',
+  '    ruangan = jamRaw || (c[col.ruangan] || \'\').trim();',
+  '  } else {',
+  '    jam = jamRaw;',
+  '    ruangan = (c[col.ruangan] || \'\').trim();',
+  '  }',
   '  if (ruangan === \'-\') ruangan = \'\';',
+  '',
+  '  const link = col.link >= 0 ? (c[col.link] || \'\').trim() : \'\';',
   '',
   '  if (!nama || !tanggal || !jam) continue;',
   '',
@@ -194,17 +259,27 @@ const parseTransformCode = [
   '  const endDt   = toISO(pd.year, pd.month, pd.day, pt.eh, pt.em);',
   '  const eventHashId = eventHash(`${seminarType}|${nim}|${startDt}`);',
   '',
+  '  // Build calendar description',
+  '  let calDesc = `Judul: ${judul}\\nNIM: ${nim}`;',
+  '  if (kk) calDesc += `\\nKK: ${kk}`;',
+  '  calDesc += `\\nPembimbing 1: ${pembimbing1}`;',
+  '  if (pembimbing2) calDesc += `\\nPembimbing 2: ${pembimbing2}`;',
+  '  if (pembimbing3) calDesc += `\\nPembimbing 3: ${pembimbing3}`;',
+  '  calDesc += `\\nPenguji 1: ${penguji1}`;',
+  '  if (penguji2) calDesc += `\\nPenguji 2: ${penguji2}`;',
+  '  if (link) calDesc += `\\nLink: ${link}`;',
+  '',
   '  results.push({ json: {',
-  '    program: "Sains Data",',
+  '    program: "Farmasi",',
   '    seminar_type: seminarType,',
-  '    nim, nama, tanggal, hari, jam, ruangan, judul, link,',
-  '    pembimbing1, pembimbing2, pembimbing3: "", penguji1, penguji2,',
+  '    nim, nama, kk, tanggal, hari, jam, ruangan, judul, link,',
+  '    pembimbing1, pembimbing2, pembimbing3, penguji1, penguji2,',
   '    start_datetime: startDt,',
   '    end_datetime: endDt,',
   '    event_hash_id: eventHashId,',
   '    calendar_summary: `[${seminarType}] ${nama} - ${nim}`,',
   '    calendar_location: ruangan ? `Ruangan ${ruangan}` : \'TBA\',',
-  '    calendar_description: `Judul: ${judul}\\nNIM: ${nim}\\nPembimbing 1: ${pembimbing1}\\nPembimbing 2: ${pembimbing2}\\nPenguji 1: ${penguji1}${penguji2 ? \'\\nPenguji 2: \' + penguji2 : \'\'}${link ? \'\\nLink: \' + link : \'\'}`',
+  '    calendar_description: calDesc',
   '  }});',
   '}',
   '',
@@ -225,7 +300,7 @@ const mergeCalendarDataCode = [
   'return results;',
 ].join('\n');
 
-// ---- Telegram template (HTML parse mode — clean formatting) ----
+// ---- Telegram template (HTML parse mode — Farmasi version with Pembimbing 3 + KK) ----
 const telegramTemplate = '={{ \n' +
   '(function() {\n' +
   '  const e = (s) => s ? String(s).replace(/&/g,\'&amp;\').replace(/</g,\'&lt;\').replace(/>/g,\'&gt;\') : \'\';\n' +
@@ -241,12 +316,14 @@ const telegramTemplate = '={{ \n' +
   '  const penguji2 = e($json.penguji2);\n' +
   '  const pembimbing1 = e($json.pembimbing1);\n' +
   '  const pembimbing2 = e($json.pembimbing2);\n' +
+  '  const pembimbing3 = e($json.pembimbing3);\n' +
   '  const calLink = $json.calendar_link || \'\';\n' +
   '\n' +
-  '  let msg = \'📢 <b>JADWAL \' + seminarType.toUpperCase() + \'</b>\' + \'\\n\\n\' +\n' +
+  '  let msg = \'📢 <b>JADWAL \' + seminarType.toUpperCase() + \' — FARMASI</b>\' + \'\\n\\n\' +\n' +
   '    \'👤 <b>Nama:</b> \' + nama + \'\\n\' +\n' +
-  '    \'🆔 <b>NIM:</b> \' + nim + \'\\n\' +\n' +
-  '    \'📝 <b>Judul:</b> \' + judul + \'\\n\\n\' +\n' +
+  '    \'🆔 <b>NIM:</b> \' + nim + \'\\n\';\n' +
+  '  if (kk) msg += \'🏷️ <b>KK:</b> \' + kk + \'\\n\';\n' +
+  '  msg += \'📝 <b>Judul:</b> \' + judul + \'\\n\\n\' +\n' +
   '    \'📅 <b>Hari/Tanggal:</b> \' + hari + \', \' + tanggal + \'\\n\' +\n' +
   '    \'🕐 <b>Jam:</b> \' + jam + \' WIB\' + \'\\n\' +\n' +
   '    \'📍 <b>Ruangan:</b> \' + (ruangan || \'TBA\') + \'\\n\\n\' +\n' +
@@ -254,6 +331,7 @@ const telegramTemplate = '={{ \n' +
   '  if (penguji2) msg += \'👩‍🏫 <b>Penguji 2:</b> \' + penguji2 + \'\\n\';\n' +
   '  msg += \'\\n👨‍💼 <b>Pembimbing 1:</b> \' + pembimbing1 + \'\\n\';\n' +
   '  if (pembimbing2) msg += \'👩‍💼 <b>Pembimbing 2:</b> \' + pembimbing2 + \'\\n\';\n' +
+  '  if (pembimbing3) msg += \'👨‍🔬 <b>Pembimbing 3:</b> \' + pembimbing3 + \'\\n\';\n' +
   '  if (calLink) msg += \'\\n📎 <a href="\' + calLink + \'">Buka Undangan Google Calendar</a>\\n\';\n' +
   '  msg += \'\\n<i>Pesan otomatis via n8n</i>\';\n' +
   '  return msg;\n' +
@@ -262,14 +340,14 @@ const telegramTemplate = '={{ \n' +
 
 // ===== BUILD WORKFLOW =====
 const workflow = {
-  name: "Seminar Sync Automation - Plugin System",
+  name: "Farmasi Seminar Sync Automation - Plugin System",
   nodes: [
     // 1. Schedule Trigger
     {
       parameters: {
         rule: { interval: [{ triggerAtHour: 6, triggerAtMinute: 0 }] }
       },
-      id: "a1b2c3d4-0001-4000-8000-000000000001",
+      id: "f1b2c3d4-0001-4000-8000-000000000001",
       name: "Schedule Trigger (06:00 WIB)",
       type: "n8n-nodes-base.scheduleTrigger",
       typeVersion: 1.2,
@@ -279,18 +357,18 @@ const workflow = {
     // 2. Config Sources
     {
       parameters: { jsCode: configSourcesCode },
-      id: "a1b2c3d4-0011-4000-8000-000000000011",
+      id: "f1b2c3d4-0011-4000-8000-000000000011",
       name: "Config Sources",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [260, 0],
-      notes: "PLUGIN CONFIG: Add/remove seminar types here"
+      notes: "PLUGIN CONFIG: Farmasi SEMPRO & SEMHAS — verify gid mapping!"
     },
 
     // 3. Loop Over Sources
     {
       parameters: { batchSize: 1, options: {} },
-      id: "a1b2c3d4-0012-4000-8000-000000000012",
+      id: "f1b2c3d4-0012-4000-8000-000000000012",
       name: "Loop Over Sources",
       type: "n8n-nodes-base.splitInBatches",
       typeVersion: 3,
@@ -309,7 +387,7 @@ const workflow = {
           response: { response: { responseFormat: "text" } }
         }
       },
-      id: "a1b2c3d4-0002-4000-8000-000000000002",
+      id: "f1b2c3d4-0002-4000-8000-000000000002",
       name: "Fetch CSV (HTTP Request)",
       type: "n8n-nodes-base.httpRequest",
       typeVersion: 4.2,
@@ -326,12 +404,12 @@ const workflow = {
     // 5. Parse & Transform Data
     {
       parameters: { jsCode: parseTransformCode },
-      id: "a1b2c3d4-0003-4000-8000-000000000003",
+      id: "f1b2c3d4-0003-4000-8000-000000000003",
       name: "Parse & Transform Data",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [1040, 0],
-      notes: "Config-driven column mapping from Config Sources"
+      notes: "Farmasi parser: handles combined jadwal, multiline date+time, pembimbing3"
     },
 
     // 6. Read State Sheet
@@ -342,7 +420,7 @@ const workflow = {
         sheetName: { __rl: true, mode: "name", value: "state-sheet" },
         options: {}
       },
-      id: "a1b2c3d4-0004-4000-8000-000000000004",
+      id: "f1b2c3d4-0004-4000-8000-000000000004",
       name: "Read State Sheet",
       type: "n8n-nodes-base.googleSheets",
       typeVersion: 4.5,
@@ -353,7 +431,7 @@ const workflow = {
           name: "Google Sheets OAuth2 - CONFIGURE ME"
         }
       },
-      notes: "SETUP: Set your State Sheet URL"
+      notes: "SETUP: Set your Farmasi State Sheet URL"
     },
 
     // 7. Idempotency Filter
@@ -364,7 +442,7 @@ const workflow = {
         query: "SELECT input1.*\nFROM input1\nLEFT JOIN input2 ON input1.event_hash_id = input2.event_hash_id\nWHERE input2.event_hash_id IS NULL",
         options: {}
       },
-      id: "a1b2c3d4-0005-4000-8000-000000000005",
+      id: "f1b2c3d4-0005-4000-8000-000000000005",
       name: "Idempotency Filter (New Events Only)",
       type: "n8n-nodes-base.merge",
       typeVersion: 3,
@@ -372,7 +450,7 @@ const workflow = {
       notes: "LEFT JOIN + WHERE NULL: only new events pass through"
     },
 
-    // 8. Filter Valid Events (replaces IF node — more reliable)
+    // 8. Filter Valid Events
     {
       parameters: {
         jsCode: [
@@ -385,7 +463,7 @@ const workflow = {
           'return valid;',
         ].join('\n')
       },
-      id: "a1b2c3d4-0006-4000-8000-000000000006",
+      id: "f1b2c3d4-0006-4000-8000-000000000006",
       name: "Has New Events?",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
@@ -393,7 +471,7 @@ const workflow = {
       notes: "Filters out empty items. If no valid items, downstream nodes won't execute."
     },
 
-    // 9. Create Google Calendar Event (runs FIRST, before Telegram)
+    // 9. Create Google Calendar Event
     {
       parameters: {
         calendar: { __rl: true, mode: "id", value: "eggi.122450032@student.itera.ac.id" },
@@ -403,10 +481,11 @@ const workflow = {
           summary: "={{ $json.calendar_summary }}",
           location: "={{ $json.calendar_location }}",
           description: "={{ $json.calendar_description }}",
+          attendees: [],
           guestsCanModify: true
         }
       },
-      id: "a1b2c3d4-0007-4000-8000-000000000007",
+      id: "f1b2c3d4-0007-4000-8000-000000000007",
       name: "Create Google Calendar Event",
       type: "n8n-nodes-base.googleCalendar",
       typeVersion: 1.2,
@@ -421,13 +500,13 @@ const workflow = {
           name: "Google Calendar OAuth2 - CONFIGURE ME"
         }
       },
-      notes: "Runs FIRST (before Telegram). Output provides htmlLink for Calendar invite."
+      notes: "SETUP: Set calendar ID and attendees. Runs FIRST (before Telegram)."
     },
 
     // 10. Merge Calendar + Data
     {
       parameters: { jsCode: mergeCalendarDataCode },
-      id: "a1b2c3d4-0014-4000-8000-000000000014",
+      id: "f1b2c3d4-0014-4000-8000-000000000014",
       name: "Merge Calendar + Data",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
@@ -445,7 +524,7 @@ const workflow = {
           disable_notification: false
         }
       },
-      id: "a1b2c3d4-0008-4000-8000-000000000008",
+      id: "f1b2c3d4-0008-4000-8000-000000000008",
       name: "Telegram Broadcast",
       type: "n8n-nodes-base.telegram",
       typeVersion: 1.2,
@@ -460,10 +539,10 @@ const workflow = {
           name: "Telegram Bot API - CONFIGURE ME"
         }
       },
-      notes: "Receives calendar link from Merge node. HTML parse mode for clean formatting."
+      notes: "Farmasi format: includes KK and Pembimbing 3. HTML parse mode."
     },
 
-    // 12. Update State Sheet (single node at end of chain, has all data + calendar_link)
+    // 12. Update State Sheet
     {
       parameters: {
         operation: "append",
@@ -519,7 +598,7 @@ const workflow = {
         },
         options: {}
       },
-      id: "a1b2c3d4-0009-4000-8000-000000000009",
+      id: "f1b2c3d4-0009-4000-8000-000000000009",
       name: "Update State Sheet",
       type: "n8n-nodes-base.googleSheets",
       typeVersion: 4.5,
@@ -530,13 +609,13 @@ const workflow = {
           name: "Google Sheets OAuth2 - CONFIGURE ME"
         }
       },
-      notes: "SETUP: Set your State Sheet URL. Runs after Telegram — has all data + calendar_link."
+      notes: "SETUP: Set your Farmasi State Sheet URL. Runs after Telegram."
     },
 
     // 13. Done Processing Source
     {
       parameters: {},
-      id: "a1b2c3d4-0013-4000-8000-000000000013",
+      id: "f1b2c3d4-0013-4000-8000-000000000013",
       name: "Done Processing Source",
       type: "n8n-nodes-base.noOp",
       typeVersion: 1,
@@ -617,19 +696,20 @@ const workflow = {
   },
   staticData: null,
   tags: [
+    { name: "farmasi", id: "tag-farmasi" },
     { name: "seminar", id: "tag-seminar" },
     { name: "automation", id: "tag-automation" },
     { name: "plugin", id: "tag-plugin" }
   ],
   triggerCount: 1,
   updatedAt: new Date().toISOString(),
-  versionId: "5"
+  versionId: "1"
 };
 
 // ===== WRITE =====
-const outPath = path.join(__dirname, 'seminar-broadcast-workflow.json');
+const outPath = path.join(__dirname, 'farmasi-broadcast-workflow.json');
 fs.writeFileSync(outPath, JSON.stringify(workflow, null, 2), 'utf-8');
-console.log('✅ Workflow JSON generated:', outPath);
+console.log('✅ Farmasi Broadcast Workflow JSON generated:', outPath);
 
 // ===== VERIFY =====
 const verify = JSON.parse(fs.readFileSync(outPath, 'utf-8'));
@@ -638,18 +718,29 @@ console.log(`Connections: ${Object.keys(verify.connections).length}`);
 
 const parseNode = verify.nodes.find(n => n.name === 'Parse & Transform Data');
 const code = parseNode.parameters.jsCode;
-console.log(`Parser has col.nim: ${code.includes('col.nim')}`);
+console.log(`Parser has parseJadwal: ${code.includes('parseJadwal')}`);
+console.log(`Parser has pembimbing3: ${code.includes('pembimbing3')}`);
+console.log(`Parser has isTimeFormat: ${code.includes('isTimeFormat')}`);
+console.log(`Parser has col.jadwal: ${code.includes('col.jadwal')}`);
 console.log(`Parser has CLEAN backtick template: ${code.includes('`${y}')}`);
 console.log(`Parser has NO backslash-backtick: ${!code.includes('\\`')}`);
 
 const telNode = verify.nodes.find(n => n.name === 'Telegram Broadcast');
 const telText = telNode.parameters.text;
+console.log(`Telegram has FARMASI: ${telText.includes('FARMASI')}`);
+console.log(`Telegram has pembimbing3: ${telText.includes('pembimbing3')}`);
 console.log(`Telegram has calendar_link: ${telText.includes('calendar_link')}`);
 console.log(`Telegram parse_mode: ${telNode.parameters.additionalFields.parse_mode}`);
-console.log(`Telegram has NO backslash in msg: ${!telText.includes('\\$')}`);
+console.log(`Telegram has NO backslash-dollar: ${!telText.includes('\\$')}`);
 console.log(`Telegram has NO backslash-backtick: ${!telText.includes('\\`')}`);
 
 const calNode = verify.nodes.find(n => n.name === 'Create Google Calendar Event');
 console.log(`Calendar enabled: ${!calNode.disabled}`);
 
-console.log('\n✅ All checks passed!');
+const configNode = verify.nodes.find(n => n.name === 'Config Sources');
+console.log(`Config has Seminar Hasil: ${configNode.parameters.jsCode.includes('Seminar Hasil')}`);
+console.log(`Config has Seminar Proposal: ${configNode.parameters.jsCode.includes('Seminar Proposal')}`);
+console.log(`Config has pembimbing3: ${configNode.parameters.jsCode.includes('pembimbing3')}`);
+console.log(`Config has jadwal: ${configNode.parameters.jsCode.includes('jadwal')}`);
+
+console.log('\n✅ All Farmasi broadcast checks passed!');

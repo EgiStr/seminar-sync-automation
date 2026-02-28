@@ -1,6 +1,16 @@
 // =============================================================
-// Build the plugin-based seminar workflow JSON
-// Usage: node build-workflow.js
+// Build the Sains Aktuaria seminar workflow JSON
+// Usage: node build-workflow-aktuaria.js
+// =============================================================
+// Spreadsheet: https://docs.google.com/spreadsheets/d/1n-VY-xCwTjmR7P4T3e2IZiaHc-0d9lc0WWF03WXeLPQ
+//   SEMHAS gid=1557763186  |  SEMPRO gid=0
+//
+// Column layout (different from Sains Data):
+//   - Combined Hari/TGL field (e.g. "Kamis, 19/09/2024")
+//   - No link column (offline seminars)
+//   - SEMPRO has only 1 penguji
+//   - Various date formats: DD/MM/YYYY, DD Month YYYY
+//   - Various time formats: HH.MM-HH.MM, HH.MM, H:MM, HH . MM
 // =============================================================
 const fs = require('fs');
 const path = require('path');
@@ -9,30 +19,30 @@ const path = require('path');
 const configSourcesCode = [
   '',
   '// ============================',
-  '// PLUGIN CONFIG — Edit this to add/remove seminar types',
+  '// PLUGIN CONFIG — Sains Aktuaria seminar types',
   '// ============================',
   '',
   'return [',
   '  { json: {',
   '    type: "Seminar Hasil",',
-  '    sheetUrl: "https://docs.google.com/spreadsheets/d/109HxAVZofGjyDlz-O8pfK4iqYPDXyX7H/export?format=csv&gid=1341055501",',
+  '    sheetUrl: "https://docs.google.com/spreadsheets/d/1n-VY-xCwTjmR7P4T3e2IZiaHc-0d9lc0WWF03WXeLPQ/export?format=csv&gid=1557763186",',
   '    columns: {',
-  '      no: 0, nim: 1, nama: 2,',
-  '      pembimbing1: 3, pembimbing2: 4,',
-  '      penguji1: 5, penguji2: 6,',
-  '      judul: 7, tanggal: 8, hari: 9,',
-  '      jam: 10, link: 11, ruangan: 12',
+  '      hariTanggal: 0, jam: 1, nama: 2, nim: 3,',
+  '      pembimbing1: 4, pembimbing2: 5,',
+  '      penguji1: 6, penguji2: 7,',
+  '      judul: 8, ruangan: 9,',
+  '      tanggal: -1, hari: -1, link: -1',
   '    }',
   '  }},',
   '  { json: {',
   '    type: "Seminar Proposal",',
-  '    sheetUrl: "https://docs.google.com/spreadsheets/d/109HxAVZofGjyDlz-O8pfK4iqYPDXyX7H/export?format=csv&gid=1605122729",',
+  '    sheetUrl: "https://docs.google.com/spreadsheets/d/1n-VY-xCwTjmR7P4T3e2IZiaHc-0d9lc0WWF03WXeLPQ/export?format=csv&gid=0",',
   '    columns: {',
-  '      no: 0, nim: 1, nama: 2,',
-  '      pembimbing1: 3, pembimbing2: 4,',
-  '      penguji1: 5, penguji2: -1,',
-  '      judul: 6, tanggal: 7, hari: 8,',
-  '      jam: 9, link: 10, ruangan: 11',
+  '      hariTanggal: 0, jam: 1, nama: 2, nim: 3,',
+  '      pembimbing1: 4, pembimbing2: 5,',
+  '      penguji1: 6, penguji2: -1,',
+  '      judul: 7, ruangan: 8,',
+  '      tanggal: -1, hari: -1, link: -1',
   '    }',
   '  }}',
   '];',
@@ -40,8 +50,9 @@ const configSourcesCode = [
 
 // ---- JS code for Parse & Transform node ----
 const parseTransformCode = [
-  '// CSV Parse + Transform + Validate + Hash  (v3 — plugin system)',
+  '// CSV Parse + Transform + Validate + Hash  (Sains Aktuaria)',
   '// Config-driven: reads column mapping from Config Sources node.',
+  '// Handles combined Hari/TGL field, DD/MM/YYYY dates, messy time formats.',
   '',
   'const config = $(\'Loop Over Sources\').item.json;',
   'const col = config.columns;',
@@ -58,7 +69,7 @@ const parseTransformCode = [
   '  return \'evt_\' + h.toString(16).padStart(8, \'0\');',
   '}',
   '',
-  '// CSV Parser (handles quoted fields with commas)',
+  '// CSV Parser (handles quoted fields with commas and newlines)',
   'function parseCsvToArrays(csvText) {',
   '  const lines = [];',
   '  let current = \'\';',
@@ -93,17 +104,61 @@ const parseTransformCode = [
   '  });',
   '}',
   '',
-  '// Month maps',
+  '// Month maps (Indonesian + English + common typos)',
   'const BULAN = {',
-  '  \'januari\':0,\'februari\':1,\'maret\':2,\'april\':3,\'mei\':4,\'juni\':5,',
+  '  \'januari\':0,\'februari\':1,\'febuari\':1,\'maret\':2,\'april\':3,\'mei\':4,\'juni\':5,',
   '  \'juli\':6,\'agustus\':7,\'september\':8,\'oktober\':9,\'october\':9,',
   '  \'november\':10,\'desember\':11,\'december\':11',
   '};',
   'const BULAN_SHORT = {',
   '  \'jan\':0,\'feb\':1,\'mar\':2,\'apr\':3,\'may\':4,\'jun\':5,',
-  '  \'jul\':6,\'aug\':7,\'sep\':8,\'oct\':9,\'nov\':10,\'dec\':11',
+  '  \'jul\':6,\'aug\':7,\'sep\':8,\'oct\':9,\'nov\':10,\'dec\':11,\'des\':11',
   '};',
+  'const BULAN_NAMES = [\'Januari\',\'Februari\',\'Maret\',\'April\',\'Mei\',\'Juni\',',
+  '  \'Juli\',\'Agustus\',\'September\',\'Oktober\',\'November\',\'Desember\'];',
   '',
+  '// Normalize day names: "Jum,at"/"Jum\'at"/"Kamis " → "Jumat"/"Kamis"',
+  'function cleanHari(s) {',
+  '  const h = s.replace(/[\',. ]/g, \'\');',
+  '  const map = {',
+  '    senin:\'Senin\', selasa:\'Selasa\', rabu:\'Rabu\',',
+  '    kamis:\'Kamis\', jumat:\'Jumat\', sabtu:\'Sabtu\', minggu:\'Minggu\'',
+  '  };',
+  '  return map[h.toLowerCase()] || h;',
+  '}',
+  '',
+  '// Parse combined "Hari, DD/MM/YYYY" or "Hari, DD Month YYYY"',
+  'function parseHariTanggal(s) {',
+  '  if (!s) return null;',
+  '  const t = s.replace(/\\n/g, \' \').trim();',
+  '',
+  '  // Try DD/MM/YYYY or DD-MM-YYYY',
+  '  const slashMatch = t.match(/(\\d{1,2})[\\/\\-](\\d{1,2})[\\/\\-](\\d{4})/);',
+  '  if (slashMatch) {',
+  '    const d = parseInt(slashMatch[1]);',
+  '    const m = parseInt(slashMatch[2]) - 1;',
+  '    const y = parseInt(slashMatch[3]);',
+  '    const before = t.substring(0, t.indexOf(slashMatch[0])).replace(/[,\\s]+$/, \'\');',
+  '    return { year: y, month: m, day: d, hari: cleanHari(before) };',
+  '  }',
+  '',
+  '  // Try DD MonthName YYYY',
+  '  const wordMatch = t.match(/(\\d{1,2})\\s+(\\w+)\\s+(\\d{4})/);',
+  '  if (wordMatch) {',
+  '    const d = parseInt(wordMatch[1]);',
+  '    const mLower = wordMatch[2].toLowerCase();',
+  '    const m = BULAN[mLower] !== undefined ? BULAN[mLower] : BULAN_SHORT[mLower.substring(0,3)];',
+  '    const y = parseInt(wordMatch[3]);',
+  '    if (m !== undefined) {',
+  '      const before = t.substring(0, t.indexOf(wordMatch[0])).replace(/[,\\s]+$/, \'\');',
+  '      return { year: y, month: m, day: d, hari: cleanHari(before) };',
+  '    }',
+  '  }',
+  '',
+  '  return null;',
+  '}',
+  '',
+  '// Parse separate date (fallback for other layouts)',
   'function parseDate(s) {',
   '  if (!s) return null;',
   '  const t = s.trim();',
@@ -126,11 +181,15 @@ const parseTransformCode = [
   '  return null;',
   '}',
   '',
+  '// Parse time range — handles messy formats: "13.00-14.00", "09.30", "8:00", "13 . 30", "WIB"',
   'function parseTimeRange(s) {',
   '  if (!s) return null;',
-  '  const cleaned = s.replace(/\\s*(WIB|WITA|WIT)\\s*/gi, \'\').trim();',
-  '  const norm = cleaned.replace(/[\\s,\\-]+$/, \'\');',
-  '  const parts = norm.split(/\\s*-\\s*/);',
+  '  let cleaned = s.replace(/\\s*(WIB|WITA|WIT)\\s*/gi, \'\').trim();',
+  '  // Remove spaces around dots/colons: "13 . 30" → "13.30"',
+  '  cleaned = cleaned.replace(/\\s*([.:])\\s*/g, \'$1\');',
+  '  // Remove trailing punctuation/whitespace',
+  '  cleaned = cleaned.replace(/[\\s,\\-]+$/, \'\');',
+  '  const parts = cleaned.split(/\\s*-\\s*/);',
   '  const parse = t => {',
   '    const m = t.trim().match(/^(\\d{1,2})[.:](\\d{2})$/);',
   '    return m ? { h: parseInt(m[1]), m: parseInt(m[2]) } : null;',
@@ -141,7 +200,8 @@ const parseTransformCode = [
   '    const end = parse(parts[1]);',
   '    if (end) return { sh: start.h, sm: start.m, eh: end.h, em: end.m };',
   '  }',
-  '  let eh = start.h + 2, em = start.m;',
+  '  // Default: 1 hour duration (typical for aktuaria seminars)',
+  '  let eh = start.h + 1, em = start.m;',
   '  if (eh >= 24) eh -= 24;',
   '  return { sh: start.h, sm: start.m, eh, em };',
   '}',
@@ -158,15 +218,24 @@ const parseTransformCode = [
   'const allRows = parseCsvToArrays(raw);',
   'if (allRows.length < 2) return [];',
   '',
+  '// Normalize all fields (remove embedded newlines from quoted CSV cells)',
+  'for (let i = 0; i < allRows.length; i++) {',
+  '  allRows[i] = allRows[i].map(f => f.replace(/\\n/g, \' \').replace(/\\s+/g, \' \').trim());',
+  '}',
+  '',
   'const results = [];',
   '',
   'for (let i = 0; i < allRows.length; i++) {',
   '  const c = allRows[i];',
   '  const firstCell = (c[0] || \'\').trim().toLowerCase();',
-  '  if (c.length < 8) continue;',
-  '  if (firstCell.startsWith(\'semester\')) continue;',
-  '  if (firstCell === \'no\' || firstCell === \'fy\') continue;',
   '',
+  '  // Skip short rows, headers, month separators',
+  '  if (c.length < 6) continue;',
+  '  if (firstCell.startsWith(\'hari\') || firstCell.startsWith(\'jadwal\')) continue;',
+  '  if (/^(januari|februari|febuari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\\b/i.test(firstCell)) continue;',
+  '  if (firstCell.includes(\'tidak lulus\')) continue;',
+  '',
+  '  // NIM validation (primary filter — catches all non-data rows)',
   '  const nim = (c[col.nim] || \'\').trim();',
   '  if (!nim || !/^\\d+$/.test(nim)) continue;',
   '',
@@ -176,17 +245,29 @@ const parseTransformCode = [
   '  const penguji1    = (c[col.penguji1]    || \'\').trim();',
   '  const penguji2    = col.penguji2 >= 0 ? (c[col.penguji2] || \'\').trim() : \'\';',
   '  const judul       = (c[col.judul]       || \'\').trim();',
-  '  const tanggal     = (c[col.tanggal]     || \'\').trim();',
-  '  const hari        = (c[col.hari]        || \'\').trim();',
-  '  const jam         = (c[col.jam]         || \'\').trim();',
-  '  const link        = (c[col.link]        || \'\').trim();',
+  '  const link        = col.link >= 0 ? (c[col.link] || \'\').trim() : \'\';',
   '  let   ruangan     = (c[col.ruangan]     || \'\').trim();',
-  '  if (ruangan === \'-\') ruangan = \'\';',
+  '  if (ruangan === \'-\' || /pinjam/i.test(ruangan)) ruangan = \'\';',
   '',
-  '  if (!nama || !tanggal || !jam) continue;',
-  '',
-  '  const pd = parseDate(tanggal);',
+  '  // Parse date — combined hariTanggal or separate fields',
+  '  let hari = \'\', tanggal = \'\', pd = null;',
+  '  if (col.hariTanggal >= 0) {',
+  '    const rawHT = (c[col.hariTanggal] || \'\').trim();',
+  '    const parsed = parseHariTanggal(rawHT);',
+  '    if (!parsed) continue;',
+  '    pd = { year: parsed.year, month: parsed.month, day: parsed.day };',
+  '    hari = parsed.hari;',
+  '    tanggal = parsed.day + \' \' + BULAN_NAMES[parsed.month] + \' \' + parsed.year;',
+  '  } else {',
+  '    tanggal = (c[col.tanggal] || \'\').trim();',
+  '    hari    = (c[col.hari]    || \'\').trim();',
+  '    pd = parseDate(tanggal);',
+  '  }',
   '  if (!pd) continue;',
+  '',
+  '  // Parse time',
+  '  const jam = (c[col.jam] || \'\').trim();',
+  '  if (!nama || !jam) continue;',
   '  const pt = parseTimeRange(jam);',
   '  if (!pt) continue;',
   '',
@@ -195,7 +276,7 @@ const parseTransformCode = [
   '  const eventHashId = eventHash(`${seminarType}|${nim}|${startDt}`);',
   '',
   '  results.push({ json: {',
-  '    program: "Sains Data",',
+  '    program: "Sains Aktuaria",',
   '    seminar_type: seminarType,',
   '    nim, nama, tanggal, hari, jam, ruangan, judul, link,',
   '    pembimbing1, pembimbing2, pembimbing3: "", penguji1, penguji2,',
@@ -262,14 +343,14 @@ const telegramTemplate = '={{ \n' +
 
 // ===== BUILD WORKFLOW =====
 const workflow = {
-  name: "Seminar Sync Automation - Plugin System",
+  name: "Seminar Sync Automation - Sains Aktuaria",
   nodes: [
     // 1. Schedule Trigger
     {
       parameters: {
         rule: { interval: [{ triggerAtHour: 6, triggerAtMinute: 0 }] }
       },
-      id: "a1b2c3d4-0001-4000-8000-000000000001",
+      id: "c1d2e3f4-0001-4000-8000-000000000001",
       name: "Schedule Trigger (06:00 WIB)",
       type: "n8n-nodes-base.scheduleTrigger",
       typeVersion: 1.2,
@@ -279,18 +360,18 @@ const workflow = {
     // 2. Config Sources
     {
       parameters: { jsCode: configSourcesCode },
-      id: "a1b2c3d4-0011-4000-8000-000000000011",
+      id: "c1d2e3f4-0011-4000-8000-000000000011",
       name: "Config Sources",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [260, 0],
-      notes: "PLUGIN CONFIG: Add/remove seminar types here"
+      notes: "PLUGIN CONFIG: Sains Aktuaria — SEMHAS + SEMPRO"
     },
 
     // 3. Loop Over Sources
     {
       parameters: { batchSize: 1, options: {} },
-      id: "a1b2c3d4-0012-4000-8000-000000000012",
+      id: "c1d2e3f4-0012-4000-8000-000000000012",
       name: "Loop Over Sources",
       type: "n8n-nodes-base.splitInBatches",
       typeVersion: 3,
@@ -309,7 +390,7 @@ const workflow = {
           response: { response: { responseFormat: "text" } }
         }
       },
-      id: "a1b2c3d4-0002-4000-8000-000000000002",
+      id: "c1d2e3f4-0002-4000-8000-000000000002",
       name: "Fetch CSV (HTTP Request)",
       type: "n8n-nodes-base.httpRequest",
       typeVersion: 4.2,
@@ -326,23 +407,23 @@ const workflow = {
     // 5. Parse & Transform Data
     {
       parameters: { jsCode: parseTransformCode },
-      id: "a1b2c3d4-0003-4000-8000-000000000003",
+      id: "c1d2e3f4-0003-4000-8000-000000000003",
       name: "Parse & Transform Data",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [1040, 0],
-      notes: "Config-driven column mapping from Config Sources"
+      notes: "Enhanced parser: handles combined Hari/TGL, DD/MM/YYYY, messy times"
     },
 
     // 6. Read State Sheet
     {
       parameters: {
         operation: "read",
-        documentId: { __rl: true, mode: "url", value: "https://docs.google.com/spreadsheets/d/1yl-IpOrB5xSCUODvvOPCD_4HxrpdK9f77Q1qT5XjV2I/edit?usp=sharing" },
+        documentId: { __rl: true, mode: "url", value: "https://docs.google.com/spreadsheets/d/1yl-IpOrB5xSCUODvvOPCD_4HxrpdK9f77Q1qT5XjV2I/edit?gid=119803019#gid=119803019" },
         sheetName: { __rl: true, mode: "name", value: "state-sheet" },
         options: {}
       },
-      id: "a1b2c3d4-0004-4000-8000-000000000004",
+      id: "c1d2e3f4-0004-4000-8000-000000000004",
       name: "Read State Sheet",
       type: "n8n-nodes-base.googleSheets",
       typeVersion: 4.5,
@@ -364,7 +445,7 @@ const workflow = {
         query: "SELECT input1.*\nFROM input1\nLEFT JOIN input2 ON input1.event_hash_id = input2.event_hash_id\nWHERE input2.event_hash_id IS NULL",
         options: {}
       },
-      id: "a1b2c3d4-0005-4000-8000-000000000005",
+      id: "c1d2e3f4-0005-4000-8000-000000000005",
       name: "Idempotency Filter (New Events Only)",
       type: "n8n-nodes-base.merge",
       typeVersion: 3,
@@ -372,7 +453,7 @@ const workflow = {
       notes: "LEFT JOIN + WHERE NULL: only new events pass through"
     },
 
-    // 8. Filter Valid Events (replaces IF node — more reliable)
+    // 8. Filter Valid Events
     {
       parameters: {
         jsCode: [
@@ -385,7 +466,7 @@ const workflow = {
           'return valid;',
         ].join('\n')
       },
-      id: "a1b2c3d4-0006-4000-8000-000000000006",
+      id: "c1d2e3f4-0006-4000-8000-000000000006",
       name: "Has New Events?",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
@@ -393,7 +474,7 @@ const workflow = {
       notes: "Filters out empty items. If no valid items, downstream nodes won't execute."
     },
 
-    // 9. Create Google Calendar Event (runs FIRST, before Telegram)
+    // 9. Create Google Calendar Event
     {
       parameters: {
         calendar: { __rl: true, mode: "id", value: "eggi.122450032@student.itera.ac.id" },
@@ -403,10 +484,11 @@ const workflow = {
           summary: "={{ $json.calendar_summary }}",
           location: "={{ $json.calendar_location }}",
           description: "={{ $json.calendar_description }}",
+          attendees: [],
           guestsCanModify: true
         }
       },
-      id: "a1b2c3d4-0007-4000-8000-000000000007",
+      id: "c1d2e3f4-0007-4000-8000-000000000007",
       name: "Create Google Calendar Event",
       type: "n8n-nodes-base.googleCalendar",
       typeVersion: 1.2,
@@ -427,7 +509,7 @@ const workflow = {
     // 10. Merge Calendar + Data
     {
       parameters: { jsCode: mergeCalendarDataCode },
-      id: "a1b2c3d4-0014-4000-8000-000000000014",
+      id: "c1d2e3f4-0014-4000-8000-000000000014",
       name: "Merge Calendar + Data",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
@@ -445,7 +527,7 @@ const workflow = {
           disable_notification: false
         }
       },
-      id: "a1b2c3d4-0008-4000-8000-000000000008",
+      id: "c1d2e3f4-0008-4000-8000-000000000008",
       name: "Telegram Broadcast",
       type: "n8n-nodes-base.telegram",
       typeVersion: 1.2,
@@ -463,11 +545,11 @@ const workflow = {
       notes: "Receives calendar link from Merge node. HTML parse mode for clean formatting."
     },
 
-    // 12. Update State Sheet (single node at end of chain, has all data + calendar_link)
+    // 12. Update State Sheet
     {
       parameters: {
         operation: "append",
-        documentId: { __rl: true, mode: "url", value: "https://docs.google.com/spreadsheets/d/1yl-IpOrB5xSCUODvvOPCD_4HxrpdK9f77Q1qT5XjV2I/edit?usp=sharing" },
+        documentId: { __rl: true, mode: "url", value: "https://docs.google.com/spreadsheets/d/1yl-IpOrB5xSCUODvvOPCD_4HxrpdK9f77Q1qT5XjV2I/edit?gid=119803019#gid=119803019" },
         sheetName: { __rl: true, mode: "name", value: "state-sheet" },
         columns: {
           mappingMode: "defineBelow",
@@ -519,7 +601,7 @@ const workflow = {
         },
         options: {}
       },
-      id: "a1b2c3d4-0009-4000-8000-000000000009",
+      id: "c1d2e3f4-0009-4000-8000-000000000009",
       name: "Update State Sheet",
       type: "n8n-nodes-base.googleSheets",
       typeVersion: 4.5,
@@ -536,7 +618,7 @@ const workflow = {
     // 13. Done Processing Source
     {
       parameters: {},
-      id: "a1b2c3d4-0013-4000-8000-000000000013",
+      id: "c1d2e3f4-0013-4000-8000-000000000013",
       name: "Done Processing Source",
       type: "n8n-nodes-base.noOp",
       typeVersion: 1,
@@ -619,15 +701,15 @@ const workflow = {
   tags: [
     { name: "seminar", id: "tag-seminar" },
     { name: "automation", id: "tag-automation" },
-    { name: "plugin", id: "tag-plugin" }
+    { name: "aktuaria", id: "tag-aktuaria" }
   ],
   triggerCount: 1,
   updatedAt: new Date().toISOString(),
-  versionId: "5"
+  versionId: "1"
 };
 
 // ===== WRITE =====
-const outPath = path.join(__dirname, 'seminar-broadcast-workflow.json');
+const outPath = path.join(__dirname, 'seminar-broadcast-workflow-aktuaria.json');
 fs.writeFileSync(outPath, JSON.stringify(workflow, null, 2), 'utf-8');
 console.log('✅ Workflow JSON generated:', outPath);
 
@@ -639,14 +721,25 @@ console.log(`Connections: ${Object.keys(verify.connections).length}`);
 const parseNode = verify.nodes.find(n => n.name === 'Parse & Transform Data');
 const code = parseNode.parameters.jsCode;
 console.log(`Parser has col.nim: ${code.includes('col.nim')}`);
+console.log(`Parser has col.hariTanggal: ${code.includes('col.hariTanggal')}`);
+console.log(`Parser has parseHariTanggal: ${code.includes('parseHariTanggal')}`);
+console.log(`Parser has cleanHari: ${code.includes('cleanHari')}`);
+console.log(`Parser has DD/MM/YYYY regex: ${code.includes('[\\/')}`);
+console.log(`Parser has febuari typo fix: ${code.includes('febuari')}`);
 console.log(`Parser has CLEAN backtick template: ${code.includes('`${y}')}`);
 console.log(`Parser has NO backslash-backtick: ${!code.includes('\\`')}`);
+
+const configNode = verify.nodes.find(n => n.name === 'Config Sources');
+const configCode = configNode.parameters.jsCode;
+console.log(`Config has SEMHAS URL (gid=1557763186): ${configCode.includes('gid=1557763186')}`);
+console.log(`Config has SEMPRO URL (gid=0): ${configCode.includes('gid=0')}`);
+console.log(`Config has hariTanggal: ${configCode.includes('hariTanggal')}`);
 
 const telNode = verify.nodes.find(n => n.name === 'Telegram Broadcast');
 const telText = telNode.parameters.text;
 console.log(`Telegram has calendar_link: ${telText.includes('calendar_link')}`);
 console.log(`Telegram parse_mode: ${telNode.parameters.additionalFields.parse_mode}`);
-console.log(`Telegram has NO backslash in msg: ${!telText.includes('\\$')}`);
+console.log(`Telegram has NO backslash-dollar: ${!telText.includes('\\$')}`);
 console.log(`Telegram has NO backslash-backtick: ${!telText.includes('\\`')}`);
 
 const calNode = verify.nodes.find(n => n.name === 'Create Google Calendar Event');
