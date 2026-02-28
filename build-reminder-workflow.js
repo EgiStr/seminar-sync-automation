@@ -1,17 +1,18 @@
 // =============================================================
-// Build the plugin-based seminar workflow JSON
-// Usage: node build-workflow.js
+// Build the morning reminder workflow JSON
+// Usage: node build-reminder-workflow.js
+// =============================================================
+// This is a SEPARATE workflow from the main broadcast.
+// It sends a reminder for seminars happening TODAY that have
+// already been broadcast by the main workflow.
 // =============================================================
 const fs = require('fs');
 const path = require('path');
 
-// ---- JS code for Config Sources node ----
+// ---- JS code for Config Sources node (same as main workflow) ----
 const configSourcesCode = [
   '',
-  '// ============================',
-  '// PLUGIN CONFIG — Edit this to add/remove seminar types',
-  '// ============================',
-  '',
+  '// PLUGIN CONFIG — Same sources as main workflow',
   'return [',
   '  { json: {',
   '    type: "Seminar Hasil",',
@@ -38,16 +39,13 @@ const configSourcesCode = [
   '];',
 ].join('\n');
 
-// ---- JS code for Parse & Transform node ----
+// ---- JS code for Parse & Transform node (same as main) ----
 const parseTransformCode = [
-  '// CSV Parse + Transform + Validate + Hash  (v3 — plugin system)',
-  '// Config-driven: reads column mapping from Config Sources node.',
-  '',
+  '// CSV Parse + Transform + Validate + Hash  (v3)',
   'const config = $(\'Loop Over Sources\').item.json;',
   'const col = config.columns;',
   'const seminarType = config.type;',
   '',
-  '// FNV-1a hash',
   'function eventHash(str) {',
   '  let h = 0x811c9dc5;',
   '  for (let i = 0; i < str.length; i++) {',
@@ -58,7 +56,6 @@ const parseTransformCode = [
   '  return \'evt_\' + h.toString(16).padStart(8, \'0\');',
   '}',
   '',
-  '// CSV Parser (handles quoted fields with commas)',
   'function parseCsvToArrays(csvText) {',
   '  const lines = [];',
   '  let current = \'\';',
@@ -76,7 +73,6 @@ const parseTransformCode = [
   '    } else { current += ch; }',
   '  }',
   '  if (current.length > 0) lines.push(current);',
-  '',
   '  return lines.map(line => {',
   '    const fields = []; let field = \'\'; let inQ = false;',
   '    for (let i = 0; i < line.length; i++) {',
@@ -93,7 +89,6 @@ const parseTransformCode = [
   '  });',
   '}',
   '',
-  '// Month maps',
   'const BULAN = {',
   '  \'januari\':0,\'februari\':1,\'maret\':2,\'april\':3,\'mei\':4,\'juni\':5,',
   '  \'juli\':6,\'agustus\':7,\'september\':8,\'oktober\':9,\'october\':9,',
@@ -151,13 +146,10 @@ const parseTransformCode = [
   '  return `${y}-${pad(mo+1)}-${pad(d)}T${pad(h)}:${pad(mi)}:00+07:00`;',
   '}',
   '',
-  '// ===== MAIN =====',
   'const raw = $input.first().json[\'data\'];',
   'if (!raw) return [];',
-  '',
   'const allRows = parseCsvToArrays(raw);',
   'if (allRows.length < 2) return [];',
-  '',
   'const results = [];',
   '',
   'for (let i = 0; i < allRows.length; i++) {',
@@ -166,10 +158,8 @@ const parseTransformCode = [
   '  if (c.length < 8) continue;',
   '  if (firstCell.startsWith(\'semester\')) continue;',
   '  if (firstCell === \'no\' || firstCell === \'fy\') continue;',
-  '',
   '  const nim = (c[col.nim] || \'\').trim();',
   '  if (!nim || !/^\\d+$/.test(nim)) continue;',
-  '',
   '  const nama        = (c[col.nama]        || \'\').trim();',
   '  const pembimbing1 = (c[col.pembimbing1] || \'\').trim();',
   '  const pembimbing2 = (c[col.pembimbing2] || \'\').trim();',
@@ -182,50 +172,65 @@ const parseTransformCode = [
   '  const link        = (c[col.link]        || \'\').trim();',
   '  let   ruangan     = (c[col.ruangan]     || \'\').trim();',
   '  if (ruangan === \'-\') ruangan = \'\';',
-  '',
   '  if (!nama || !tanggal || !jam) continue;',
-  '',
   '  const pd = parseDate(tanggal);',
   '  if (!pd) continue;',
   '  const pt = parseTimeRange(jam);',
   '  if (!pt) continue;',
-  '',
   '  const startDt = toISO(pd.year, pd.month, pd.day, pt.sh, pt.sm);',
   '  const endDt   = toISO(pd.year, pd.month, pd.day, pt.eh, pt.em);',
   '  const eventHashId = eventHash(`${seminarType}|${nim}|${startDt}`);',
-  '',
   '  results.push({ json: {',
   '    seminar_type: seminarType,',
   '    nim, nama, tanggal, hari, jam, ruangan, judul, link,',
   '    pembimbing1, pembimbing2, penguji1, penguji2,',
   '    start_datetime: startDt,',
   '    end_datetime: endDt,',
-  '    event_hash_id: eventHashId,',
-  '    calendar_summary: `[${seminarType}] ${nama} - ${nim}`,',
-  '    calendar_location: ruangan ? `Ruangan ${ruangan}` : \'TBA\',',
-  '    calendar_description: `Judul: ${judul}\\nNIM: ${nim}\\nPembimbing 1: ${pembimbing1}\\nPembimbing 2: ${pembimbing2}\\nPenguji 1: ${penguji1}${penguji2 ? \'\\nPenguji 2: \' + penguji2 : \'\'}${link ? \'\\nLink: \' + link : \'\'}`',
+  '    event_hash_id: eventHashId',
   '  }});',
   '}',
-  '',
   'return results;',
 ].join('\n');
 
-const mergeCalendarDataCode = [
-  '// Merge Calendar API responses with original event data',
-  '// Uses index-based matching (Calendar processes items in same order)',
-  'const calItems = $input.all();',
-  'const originals = $(\'Has New Events?\').all();',
+// ---- JS code for Filter Today + Already Sent ----
+const filterTodayCode = [
+  '// Filter: only events happening TODAY that are already in State Sheet',
+  'const allParsed = $(\'Parse & Transform Data\').all();',
+  'const allState  = $(\'Read State Sheet\').all();',
+  '',
+  '// Build map of state entries by event_hash_id',
+  'const stateMap = {};',
+  'for (const item of allState) {',
+  '  const hash = (item.json.event_hash_id || \'\').trim();',
+  '  if (hash) stateMap[hash] = item.json;',
+  '}',
+  '',
+  '// Get today in YYYY-MM-DD (Asia/Jakarta UTC+7)',
+  'const now = new Date();',
+  'const jakartaOffset = 7 * 60;',
+  'const utc = now.getTime() + (now.getTimezoneOffset() * 60000);',
+  'const jakartaTime = new Date(utc + (jakartaOffset * 60000));',
+  'const todayStr = jakartaTime.getFullYear() + \'-\' +',
+  '  String(jakartaTime.getMonth() + 1).padStart(2, \'0\') + \'-\' +',
+  '  String(jakartaTime.getDate()).padStart(2, \'0\');',
+  '',
   'const results = [];',
-  'for (let i = 0; i < calItems.length; i++) {',
-  '  const calLink = calItems[i].json.htmlLink || \'\';',
-  '  const orig = originals[i] ? originals[i].json : {};',
-  '  results.push({ json: { ...orig, calendar_link: calLink } });',
+  'for (const item of allParsed) {',
+  '  const hash = item.json.event_hash_id;',
+  '  if (!stateMap[hash]) continue;',
+  '  const startDt = item.json.start_datetime || \'\';',
+  '  if (!startDt.startsWith(todayStr)) continue;',
+  '  const stateData = stateMap[hash];',
+  '  results.push({ json: {',
+  '    ...item.json,',
+  '    calendar_link: stateData.calendar_link || \'\'',
+  '  }});',
   '}',
   'return results;',
 ].join('\n');
 
-// ---- Telegram template (HTML parse mode — clean formatting) ----
-const telegramTemplate = '={{ \n' +
+// ---- Telegram REMINDER template (HTML, string concat — no escaping issues) ----
+const telegramReminderTemplate = '={{ \n' +
   '(function() {\n' +
   '  const e = (s) => s ? String(s).replace(/&/g,\'&amp;\').replace(/</g,\'&lt;\').replace(/>/g,\'&gt;\') : \'\';\n' +
   '  const seminarType = e($json.seminar_type);\n' +
@@ -242,7 +247,9 @@ const telegramTemplate = '={{ \n' +
   '  const pembimbing2 = e($json.pembimbing2);\n' +
   '  const calLink = $json.calendar_link || \'\';\n' +
   '\n' +
-  '  let msg = \'📢 <b>JADWAL \' + seminarType.toUpperCase() + \'</b>\' + \'\\n\\n\' +\n' +
+  '  let msg = \'🔔 <b>REMINDER: SEMINAR HARI INI</b>\' + \'\\n\' +\n' +
+  '    \'━━━━━━━━━━━━━━━━━━━━━━\' + \'\\n\\n\' +\n' +
+  '    \'📢 <b>\' + seminarType.toUpperCase() + \'</b>\' + \'\\n\\n\' +\n' +
   '    \'👤 <b>Nama:</b> \' + nama + \'\\n\' +\n' +
   '    \'🆔 <b>NIM:</b> \' + nim + \'\\n\' +\n' +
   '    \'📝 <b>Judul:</b> \' + judul + \'\\n\\n\' +\n' +
@@ -254,50 +261,43 @@ const telegramTemplate = '={{ \n' +
   '  msg += \'\\n👨‍💼 <b>Pembimbing 1:</b> \' + pembimbing1 + \'\\n\';\n' +
   '  if (pembimbing2) msg += \'👩‍💼 <b>Pembimbing 2:</b> \' + pembimbing2 + \'\\n\';\n' +
   '  if (calLink) msg += \'\\n📎 <a href="\' + calLink + \'">Buka Undangan Google Calendar</a>\\n\';\n' +
-  '  msg += \'\\n<i>Pesan otomatis via n8n</i>\';\n' +
+  '  msg += \'\\n<i>⏰ Pengingat otomatis via n8n</i>\';\n' +
   '  return msg;\n' +
   '})()\n' +
   '}}';
 
-// ===== BUILD WORKFLOW =====
+// ===== BUILD REMINDER WORKFLOW =====
 const workflow = {
-  name: "Seminar Sync Automation - Plugin System",
+  name: "Seminar Morning Reminder",
   nodes: [
-    // 1. Schedule Trigger
     {
       parameters: {
         rule: { interval: [{ triggerAtHour: 6, triggerAtMinute: 0 }] }
       },
-      id: "a1b2c3d4-0001-4000-8000-000000000001",
-      name: "Schedule Trigger (06:00 WIB)",
+      id: "b1b2c3d4-0001-4000-8000-000000000001",
+      name: "Schedule Trigger (Morning Reminder)",
       type: "n8n-nodes-base.scheduleTrigger",
       typeVersion: 1.2,
-      position: [0, 0]
+      position: [0, 0],
+      notes: "CONFIGURABLE: Change triggerAtHour to set reminder time"
     },
-
-    // 2. Config Sources
     {
       parameters: { jsCode: configSourcesCode },
-      id: "a1b2c3d4-0011-4000-8000-000000000011",
+      id: "b1b2c3d4-0011-4000-8000-000000000011",
       name: "Config Sources",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [260, 0],
-      notes: "PLUGIN CONFIG: Add/remove seminar types here"
+      notes: "Same config as main workflow"
     },
-
-    // 3. Loop Over Sources
     {
       parameters: { batchSize: 1, options: {} },
-      id: "a1b2c3d4-0012-4000-8000-000000000012",
+      id: "b1b2c3d4-0012-4000-8000-000000000012",
       name: "Loop Over Sources",
       type: "n8n-nodes-base.splitInBatches",
       typeVersion: 3,
-      position: [520, 0],
-      notes: "Processes one source config at a time"
+      position: [520, 0]
     },
-
-    // 4. Fetch CSV (dynamic URL)
     {
       parameters: {
         method: "GET",
@@ -308,7 +308,7 @@ const workflow = {
           response: { response: { responseFormat: "text" } }
         }
       },
-      id: "a1b2c3d4-0002-4000-8000-000000000002",
+      id: "b1b2c3d4-0002-4000-8000-000000000002",
       name: "Fetch CSV (HTTP Request)",
       type: "n8n-nodes-base.httpRequest",
       typeVersion: 4.2,
@@ -318,22 +318,16 @@ const workflow = {
           id: "GOOGLE_SHEETS_CREDENTIAL_ID",
           name: "Google Sheets OAuth2 - CONFIGURE ME"
         }
-      },
-      notes: "URL comes from Config Sources — no need to edit"
+      }
     },
-
-    // 5. Parse & Transform Data
     {
       parameters: { jsCode: parseTransformCode },
-      id: "a1b2c3d4-0003-4000-8000-000000000003",
+      id: "b1b2c3d4-0003-4000-8000-000000000003",
       name: "Parse & Transform Data",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
-      position: [1040, 0],
-      notes: "Config-driven column mapping from Config Sources"
+      position: [1040, 0]
     },
-
-    // 6. Read State Sheet
     {
       parameters: {
         operation: "read",
@@ -341,130 +335,62 @@ const workflow = {
         sheetName: { __rl: true, mode: "name", value: "state-sheet" },
         options: {}
       },
-      id: "a1b2c3d4-0004-4000-8000-000000000004",
+      id: "b1b2c3d4-0004-4000-8000-000000000004",
       name: "Read State Sheet",
       type: "n8n-nodes-base.googleSheets",
       typeVersion: 4.5,
-      position: [1040, 240],
+      position: [780, 240],
       credentials: {
         googleSheetsOAuth2Api: {
           id: "GOOGLE_SHEETS_CREDENTIAL_ID",
           name: "Google Sheets OAuth2 - CONFIGURE ME"
         }
       },
-      notes: "SETUP: Set your State Sheet URL"
+      notes: "SETUP: Set your State Sheet URL (same as main workflow)"
     },
-
-    // 7. Idempotency Filter
+    {
+      parameters: { jsCode: filterTodayCode },
+      id: "b1b2c3d4-0005-4000-8000-000000000005",
+      name: "Filter Today + Already Sent",
+      type: "n8n-nodes-base.code",
+      typeVersion: 2,
+      position: [1300, 0],
+      notes: "INNER JOIN with state sheet + filter today's date"
+    },
     {
       parameters: {
-        mode: "combineBySql",
-        numberInputs: 2,
-        query: "SELECT input1.*\nFROM input1\nLEFT JOIN input2 ON input1.event_hash_id = input2.event_hash_id\nWHERE input2.event_hash_id IS NULL",
+        conditions: {
+          options: { caseSensitive: true, leftValue: "", typeValidation: "strict" },
+          conditions: [{
+            id: "condition-check-today",
+            leftValue: "={{ $input.all().length }}",
+            rightValue: "0",
+            operator: { type: "number", operation: "gt" }
+          }],
+          combinator: "and"
+        },
         options: {}
       },
-      id: "a1b2c3d4-0005-4000-8000-000000000005",
-      name: "Idempotency Filter (New Events Only)",
-      type: "n8n-nodes-base.merge",
-      typeVersion: 3,
-      position: [1300, 0],
-      notes: "LEFT JOIN + WHERE NULL: only new events pass through"
-    },
-
-    // 8. Filter Valid Events (replaces IF node — more reliable)
-    {
-      parameters: {
-        jsCode: [
-          '// Filter out empty items from SQL Merge (returns empty item when no matches)',
-          'const items = $input.all();',
-          'const valid = items.filter(item => {',
-          '  const hash = (item.json.event_hash_id || \'\').trim();',
-          '  return hash.length > 0;',
-          '});',
-          'return valid;',
-        ].join('\n')
-      },
-      id: "a1b2c3d4-0006-4000-8000-000000000006",
-      name: "Has New Events?",
-      type: "n8n-nodes-base.code",
+      id: "b1b2c3d4-0006-4000-8000-000000000006",
+      name: "Has Today Events?",
+      type: "n8n-nodes-base.if",
       typeVersion: 2,
-      position: [1560, 0],
-      notes: "Filters out empty items. If no valid items, downstream nodes won't execute."
+      position: [1560, 0]
     },
-
-    // 9. Create Google Calendar Event (runs FIRST, before Telegram)
-    {
-      parameters: {
-        calendar: { __rl: true, mode: "id", value: "eggi.122450032@student.itera.ac.id" },
-        start: "={{ $json.start_datetime }}",
-        end: "={{ $json.end_datetime }}",
-        additionalFields: {
-          summary: "={{ $json.calendar_summary }}",
-          location: "={{ $json.calendar_location }}",
-          description: "={{ $json.calendar_description }}",
-          attendees: [
-            "ahmad.122450044@student.itera.ac.id",
-            "happy.122450013@student.itera.ac.id",
-            "muhammad.122450031@student.itera.ac.id",
-            "gymnastiar.122450096@student.itera.ac.id",
-            "sofyan.122450116@student.itera.ac.id",
-            "rahma.122450036@student.itera.ac.id",
-            "deva.122450014@student.itera.ac.id",
-            "raid.122450027@student.itera.ac.id",
-            "nisrina.122450052@student.itera.ac.id",
-            "aditya.122450113@student.itera.ac.id",
-            "khoirul.122450039@student.itera.ac.id",
-            "khoirul.122450010@student.itera.ac.id",
-            "berliana.122450065@student.itera.ac.id",
-            "asa.122450005@student.itera.ac.id"
-          ],
-          guestsCanModify: false
-        }
-      },
-      id: "a1b2c3d4-0007-4000-8000-000000000007",
-      name: "Create Google Calendar Event",
-      type: "n8n-nodes-base.googleCalendar",
-      typeVersion: 1.2,
-      position: [1820, -100],
-      onError: "continueRegularOutput",
-      retryOnFail: true,
-      maxTries: 3,
-      waitBetweenTries: 5000,
-      credentials: {
-        googleCalendarOAuth2Api: {
-          id: "GOOGLE_CALENDAR_CREDENTIAL_ID",
-          name: "Google Calendar OAuth2 - CONFIGURE ME"
-        }
-      },
-      notes: "Runs FIRST (before Telegram). Output provides htmlLink for Calendar invite."
-    },
-
-    // 10. Merge Calendar + Data
-    {
-      parameters: { jsCode: mergeCalendarDataCode },
-      id: "a1b2c3d4-0014-4000-8000-000000000014",
-      name: "Merge Calendar + Data",
-      type: "n8n-nodes-base.code",
-      typeVersion: 2,
-      position: [2080, -100],
-      notes: "Combines original event data with Google Calendar htmlLink"
-    },
-
-    // 11. Telegram Broadcast
     {
       parameters: {
         chatId: "YOUR_TELEGRAM_CHAT_ID_HERE",
-        text: telegramTemplate,
+        text: telegramReminderTemplate,
         additionalFields: {
           parse_mode: "HTML",
           disable_notification: false
         }
       },
-      id: "a1b2c3d4-0008-4000-8000-000000000008",
-      name: "Telegram Broadcast",
+      id: "b1b2c3d4-0008-4000-8000-000000000008",
+      name: "Telegram Reminder",
       type: "n8n-nodes-base.telegram",
       typeVersion: 1.2,
-      position: [2340, -100],
+      position: [1820, 0],
       onError: "continueRegularOutput",
       retryOnFail: true,
       maxTries: 3,
@@ -475,79 +401,32 @@ const workflow = {
           name: "Telegram Bot API - CONFIGURE ME"
         }
       },
-      notes: "Receives calendar link from Merge node. HTML parse mode for clean formatting."
+      notes: "REMINDER format — different from main broadcast"
     },
-
-    // 12. Update State Sheet (single node at end of chain, has all data + calendar_link)
-    {
-      parameters: {
-        operation: "append",
-        documentId: { __rl: true, mode: "url", value: "YOUR_STATE_SHEET_URL_HERE" },
-        sheetName: { __rl: true, mode: "name", value: "state-sheet" },
-        columns: {
-          mappingMode: "defineBelow",
-          value: {
-            event_hash_id: "={{ $json.event_hash_id }}",
-            seminar_type: "={{ $json.seminar_type }}",
-            nim: "={{ $json.nim }}",
-            nama: "={{ $json.nama }}",
-            tanggal: "={{ $json.tanggal }}",
-            jam: "={{ $json.jam }}",
-            start_datetime: "={{ $json.start_datetime }}",
-            calendar_link: "={{ $json.calendar_link }}",
-            processed_at: "={{ $now.toISO() }}"
-          },
-          matchingColumns: [],
-          schema: [
-            { id: "event_hash_id", displayName: "event_hash_id", required: false, defaultMatch: false, canBeUsedToMatch: true, display: true, type: "string", removed: false },
-            { id: "seminar_type", displayName: "seminar_type", required: false, defaultMatch: false, canBeUsedToMatch: false, display: true, type: "string", removed: false },
-            { id: "nim", displayName: "nim", required: false, defaultMatch: false, canBeUsedToMatch: false, display: true, type: "string", removed: false },
-            { id: "nama", displayName: "nama", required: false, defaultMatch: false, canBeUsedToMatch: false, display: true, type: "string", removed: false },
-            { id: "tanggal", displayName: "tanggal", required: false, defaultMatch: false, canBeUsedToMatch: false, display: true, type: "string", removed: false },
-            { id: "jam", displayName: "jam", required: false, defaultMatch: false, canBeUsedToMatch: false, display: true, type: "string", removed: false },
-            { id: "start_datetime", displayName: "start_datetime", required: false, defaultMatch: false, canBeUsedToMatch: false, display: true, type: "string", removed: false },
-            { id: "calendar_link", displayName: "calendar_link", required: false, defaultMatch: false, canBeUsedToMatch: false, display: true, type: "string", removed: false },
-            { id: "processed_at", displayName: "processed_at", required: false, defaultMatch: false, canBeUsedToMatch: false, display: true, type: "string", removed: false }
-          ]
-        },
-        options: {}
-      },
-      id: "a1b2c3d4-0009-4000-8000-000000000009",
-      name: "Update State Sheet",
-      type: "n8n-nodes-base.googleSheets",
-      typeVersion: 4.5,
-      position: [2600, -100],
-      credentials: {
-        googleSheetsOAuth2Api: {
-          id: "GOOGLE_SHEETS_CREDENTIAL_ID",
-          name: "Google Sheets OAuth2 - CONFIGURE ME"
-        }
-      },
-      notes: "SETUP: Set your State Sheet URL. Runs after Telegram — has all data + calendar_link."
-    },
-
-    // 13. Done Processing Source
     {
       parameters: {},
-      id: "a1b2c3d4-0013-4000-8000-000000000013",
+      id: "b1b2c3d4-0010-4000-8000-000000000010",
+      name: "No Today Events (Skip)",
+      type: "n8n-nodes-base.noOp",
+      typeVersion: 1,
+      position: [1820, 300]
+    },
+    {
+      parameters: {},
+      id: "b1b2c3d4-0013-4000-8000-000000000013",
       name: "Done Processing Source",
       type: "n8n-nodes-base.noOp",
       typeVersion: 1,
-      position: [2860, 100],
-      notes: "Loops back to next source"
+      position: [2080, 0]
     }
   ],
 
   connections: {
-    "Schedule Trigger (06:00 WIB)": {
-      main: [[
-        { node: "Config Sources", type: "main", index: 0 }
-      ]]
+    "Schedule Trigger (Morning Reminder)": {
+      main: [[{ node: "Config Sources", type: "main", index: 0 }]]
     },
     "Config Sources": {
-      main: [[
-        { node: "Loop Over Sources", type: "main", index: 0 }
-      ]]
+      main: [[{ node: "Loop Over Sources", type: "main", index: 0 }]]
     },
     "Loop Over Sources": {
       main: [
@@ -557,44 +436,28 @@ const workflow = {
       ]
     },
     "Fetch CSV (HTTP Request)": {
-      main: [[
-        { node: "Parse & Transform Data", type: "main", index: 0 }
-      ]]
+      main: [[{ node: "Parse & Transform Data", type: "main", index: 0 }]]
     },
     "Parse & Transform Data": {
-      main: [[
-        { node: "Idempotency Filter (New Events Only)", type: "main", index: 0 }
-      ]]
+      main: [[{ node: "Filter Today + Already Sent", type: "main", index: 0 }]]
     },
     "Read State Sheet": {
-      main: [[
-        { node: "Idempotency Filter (New Events Only)", type: "main", index: 1 }
-      ]]
+      main: [[{ node: "Filter Today + Already Sent", type: "main", index: 0 }]]
     },
-    "Idempotency Filter (New Events Only)": {
-      main: [[
-        { node: "Has New Events?", type: "main", index: 0 }
-      ]]
+    "Filter Today + Already Sent": {
+      main: [[{ node: "Has Today Events?", type: "main", index: 0 }]]
     },
-    "Has New Events?": {
-      main: [[
-        { node: "Create Google Calendar Event", type: "main", index: 0 }
-      ]]
+    "Has Today Events?": {
+      main: [
+        [{ node: "Telegram Reminder", type: "main", index: 0 }],
+        [{ node: "No Today Events (Skip)", type: "main", index: 0 }]
+      ]
     },
-    "Create Google Calendar Event": {
-      main: [[{ node: "Merge Calendar + Data", type: "main", index: 0 }]]
-    },
-    "Merge Calendar + Data": {
-      main: [[
-        { node: "Telegram Broadcast", type: "main", index: 0 },
-        { node: "Update State Sheet", type: "main", index: 0 }
-      ]]
-    },
-    "Telegram Broadcast": {
+    "Telegram Reminder": {
       main: [[{ node: "Done Processing Source", type: "main", index: 0 }]]
     },
-    "Update State Sheet": {
-      main: [[{ node: "Done Processing Source", type: "main", index: 0 }]]
+    "No Today Events (Skip)": {
+      main: [[{ node: "Loop Over Sources", type: "main", index: 0 }]]
     },
     "Done Processing Source": {
       main: [[{ node: "Loop Over Sources", type: "main", index: 0 }]]
@@ -611,38 +474,34 @@ const workflow = {
   staticData: null,
   tags: [
     { name: "seminar", id: "tag-seminar" },
-    { name: "automation", id: "tag-automation" },
-    { name: "plugin", id: "tag-plugin" }
+    { name: "reminder", id: "tag-reminder" }
   ],
   triggerCount: 1,
   updatedAt: new Date().toISOString(),
-  versionId: "5"
+  versionId: "1"
 };
 
 // ===== WRITE =====
-const outPath = path.join(__dirname, 'seminar-broadcast-workflow.json');
+const outPath = path.join(__dirname, 'seminar-reminder-workflow.json');
 fs.writeFileSync(outPath, JSON.stringify(workflow, null, 2), 'utf-8');
-console.log('✅ Workflow JSON generated:', outPath);
+console.log('✅ Reminder Workflow JSON generated:', outPath);
 
 // ===== VERIFY =====
 const verify = JSON.parse(fs.readFileSync(outPath, 'utf-8'));
 console.log(`Nodes: ${verify.nodes.length}`);
 console.log(`Connections: ${Object.keys(verify.connections).length}`);
 
-const parseNode = verify.nodes.find(n => n.name === 'Parse & Transform Data');
-const code = parseNode.parameters.jsCode;
-console.log(`Parser has col.nim: ${code.includes('col.nim')}`);
-console.log(`Parser has CLEAN backtick template: ${code.includes('`${y}')}`);
-console.log(`Parser has NO backslash-backtick: ${!code.includes('\\`')}`);
+const filterNode = verify.nodes.find(n => n.name === 'Filter Today + Already Sent');
+console.log(`Filter has todayStr: ${filterNode.parameters.jsCode.includes('todayStr')}`);
 
-const telNode = verify.nodes.find(n => n.name === 'Telegram Broadcast');
-const telText = telNode.parameters.text;
-console.log(`Telegram has calendar_link: ${telText.includes('calendar_link')}`);
+const telNode = verify.nodes.find(n => n.name === 'Telegram Reminder');
+console.log(`Telegram has REMINDER: ${telNode.parameters.text.includes('REMINDER')}`);
+console.log(`Telegram has calendar_link: ${telNode.parameters.text.includes('calendar_link')}`);
 console.log(`Telegram parse_mode: ${telNode.parameters.additionalFields.parse_mode}`);
-console.log(`Telegram has NO backslash in msg: ${!telText.includes('\\$')}`);
-console.log(`Telegram has NO backslash-backtick: ${!telText.includes('\\`')}`);
+console.log(`Telegram has NO backslash-dollar: ${!telNode.parameters.text.includes('\\$')}`);
 
-const calNode = verify.nodes.find(n => n.name === 'Create Google Calendar Event');
-console.log(`Calendar enabled: ${!calNode.disabled}`);
+const parseNode = verify.nodes.find(n => n.name === 'Parse & Transform Data');
+console.log(`Parser has CLEAN backtick: ${parseNode.parameters.jsCode.includes('`${y}')}`);
+console.log(`Parser has NO backslash-backtick: ${!parseNode.parameters.jsCode.includes('\\`')}`);
 
 console.log('\n✅ All checks passed!');

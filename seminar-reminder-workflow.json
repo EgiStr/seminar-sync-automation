@@ -1,0 +1,381 @@
+{
+  "name": "Seminar Morning Reminder",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "b1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Schedule Trigger (Morning Reminder)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "notes": "CONFIGURABLE: Change triggerAtHour to set reminder time"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// PLUGIN CONFIG — Same sources as main workflow\nreturn [\n  { json: {\n    type: \"Seminar Hasil\",\n    sheetUrl: \"https://docs.google.com/spreadsheets/d/109HxAVZofGjyDlz-O8pfK4iqYPDXyX7H/export?format=csv&gid=1341055501\",\n    columns: {\n      no: 0, nim: 1, nama: 2,\n      pembimbing1: 3, pembimbing2: 4,\n      penguji1: 5, penguji2: 6,\n      judul: 7, tanggal: 8, hari: 9,\n      jam: 10, link: 11, ruangan: 12\n    }\n  }},\n  { json: {\n    type: \"Seminar Proposal\",\n    sheetUrl: \"https://docs.google.com/spreadsheets/d/109HxAVZofGjyDlz-O8pfK4iqYPDXyX7H/export?format=csv&gid=1605122729\",\n    columns: {\n      no: 0, nim: 1, nama: 2,\n      pembimbing1: 3, pembimbing2: 4,\n      penguji1: 5, penguji2: -1,\n      judul: 6, tanggal: 7, hari: 8,\n      jam: 9, link: 10, ruangan: 11\n    }\n  }}\n];"
+      },
+      "id": "b1b2c3d4-0011-4000-8000-000000000011",
+      "name": "Config Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "notes": "Same config as main workflow"
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "b1b2c3d4-0012-4000-8000-000000000012",
+      "name": "Loop Over Sources",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.sheetUrl }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Fetch CSV (HTTP Request)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        780,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets OAuth2 - CONFIGURE ME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// CSV Parse + Transform + Validate + Hash  (v3)\nconst config = $('Loop Over Sources').item.json;\nconst col = config.columns;\nconst seminarType = config.type;\n\nfunction eventHash(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    h ^= str.charCodeAt(i);\n    h = Math.imul(h, 16777619);\n    h = h >>> 0;\n  }\n  return 'evt_' + h.toString(16).padStart(8, '0');\n}\n\nfunction parseCsvToArrays(csvText) {\n  const lines = [];\n  let current = '';\n  let inQuotes = false;\n  for (let i = 0; i < csvText.length; i++) {\n    const ch = csvText[i];\n    if (ch === '\"') {\n      current += ch;\n      if (inQuotes && csvText[i + 1] === '\"') { current += '\"'; i++; }\n      else { inQuotes = !inQuotes; }\n    } else if (ch === '\\n' && !inQuotes) {\n      lines.push(current); current = '';\n    } else if (ch === '\\r' && !inQuotes) {\n      /* skip */\n    } else { current += ch; }\n  }\n  if (current.length > 0) lines.push(current);\n  return lines.map(line => {\n    const fields = []; let field = ''; let inQ = false;\n    for (let i = 0; i < line.length; i++) {\n      const ch = line[i];\n      if (ch === '\"') {\n        if (inQ && line[i + 1] === '\"') { field += '\"'; i++; }\n        else { inQ = !inQ; }\n      } else if (ch === ',' && !inQ) {\n        fields.push(field.trim()); field = '';\n      } else { field += ch; }\n    }\n    fields.push(field.trim());\n    return fields;\n  });\n}\n\nconst BULAN = {\n  'januari':0,'februari':1,'maret':2,'april':3,'mei':4,'juni':5,\n  'juli':6,'agustus':7,'september':8,'oktober':9,'october':9,\n  'november':10,'desember':11,'december':11\n};\nconst BULAN_SHORT = {\n  'jan':0,'feb':1,'mar':2,'apr':3,'may':4,'jun':5,\n  'jul':6,'aug':7,'sep':8,'oct':9,'nov':10,'dec':11\n};\n\nfunction parseDate(s) {\n  if (!s) return null;\n  const t = s.trim();\n  const dashMatch = t.match(/^(\\d{1,2})-(\\w+)-(\\d{4})$/);\n  if (dashMatch) {\n    const d = parseInt(dashMatch[1]);\n    const mKey = dashMatch[2].toLowerCase().substring(0, 3);\n    const m = BULAN_SHORT[mKey];\n    const y = parseInt(dashMatch[3]);\n    if (!isNaN(d) && m !== undefined && !isNaN(y)) return { year: y, month: m, day: d };\n  }\n  const p = t.split(/\\s+/);\n  if (p.length >= 3) {\n    const d = parseInt(p[0]);\n    const mLower = p[1].toLowerCase();\n    const m = BULAN[mLower] !== undefined ? BULAN[mLower] : BULAN_SHORT[mLower.substring(0, 3)];\n    const y = parseInt(p[2]);\n    if (!isNaN(d) && m !== undefined && !isNaN(y)) return { year: y, month: m, day: d };\n  }\n  return null;\n}\n\nfunction parseTimeRange(s) {\n  if (!s) return null;\n  const cleaned = s.replace(/\\s*(WIB|WITA|WIT)\\s*/gi, '').trim();\n  const norm = cleaned.replace(/[\\s,\\-]+$/, '');\n  const parts = norm.split(/\\s*-\\s*/);\n  const parse = t => {\n    const m = t.trim().match(/^(\\d{1,2})[.:](\\d{2})$/);\n    return m ? { h: parseInt(m[1]), m: parseInt(m[2]) } : null;\n  };\n  const start = parse(parts[0]);\n  if (!start) return null;\n  if (parts.length >= 2 && parts[1]) {\n    const end = parse(parts[1]);\n    if (end) return { sh: start.h, sm: start.m, eh: end.h, em: end.m };\n  }\n  let eh = start.h + 2, em = start.m;\n  if (eh >= 24) eh -= 24;\n  return { sh: start.h, sm: start.m, eh, em };\n}\n\nfunction toISO(y, mo, d, h, mi) {\n  const pad = n => String(n).padStart(2, '0');\n  return `${y}-${pad(mo+1)}-${pad(d)}T${pad(h)}:${pad(mi)}:00+07:00`;\n}\n\nconst raw = $input.first().json['data'];\nif (!raw) return [];\nconst allRows = parseCsvToArrays(raw);\nif (allRows.length < 2) return [];\nconst results = [];\n\nfor (let i = 0; i < allRows.length; i++) {\n  const c = allRows[i];\n  const firstCell = (c[0] || '').trim().toLowerCase();\n  if (c.length < 8) continue;\n  if (firstCell.startsWith('semester')) continue;\n  if (firstCell === 'no' || firstCell === 'fy') continue;\n  const nim = (c[col.nim] || '').trim();\n  if (!nim || !/^\\d+$/.test(nim)) continue;\n  const nama        = (c[col.nama]        || '').trim();\n  const pembimbing1 = (c[col.pembimbing1] || '').trim();\n  const pembimbing2 = (c[col.pembimbing2] || '').trim();\n  const penguji1    = (c[col.penguji1]    || '').trim();\n  const penguji2    = col.penguji2 >= 0 ? (c[col.penguji2] || '').trim() : '';\n  const judul       = (c[col.judul]       || '').trim();\n  const tanggal     = (c[col.tanggal]     || '').trim();\n  const hari        = (c[col.hari]        || '').trim();\n  const jam         = (c[col.jam]         || '').trim();\n  const link        = (c[col.link]        || '').trim();\n  let   ruangan     = (c[col.ruangan]     || '').trim();\n  if (ruangan === '-') ruangan = '';\n  if (!nama || !tanggal || !jam) continue;\n  const pd = parseDate(tanggal);\n  if (!pd) continue;\n  const pt = parseTimeRange(jam);\n  if (!pt) continue;\n  const startDt = toISO(pd.year, pd.month, pd.day, pt.sh, pt.sm);\n  const endDt   = toISO(pd.year, pd.month, pd.day, pt.eh, pt.em);\n  const eventHashId = eventHash(`${seminarType}|${nim}|${startDt}`);\n  results.push({ json: {\n    seminar_type: seminarType,\n    nim, nama, tanggal, hari, jam, ruangan, judul, link,\n    pembimbing1, pembimbing2, penguji1, penguji2,\n    start_datetime: startDt,\n    end_datetime: endDt,\n    event_hash_id: eventHashId\n  }});\n}\nreturn results;"
+      },
+      "id": "b1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Parse & Transform Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "YOUR_STATE_SHEET_URL_HERE"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "state-sheet"
+        },
+        "options": {}
+      },
+      "id": "b1b2c3d4-0004-4000-8000-000000000004",
+      "name": "Read State Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        780,
+        240
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets OAuth2 - CONFIGURE ME"
+        }
+      },
+      "notes": "SETUP: Set your State Sheet URL (same as main workflow)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter: only events happening TODAY that are already in State Sheet\nconst allParsed = $('Parse & Transform Data').all();\nconst allState  = $('Read State Sheet').all();\n\n// Build map of state entries by event_hash_id\nconst stateMap = {};\nfor (const item of allState) {\n  const hash = (item.json.event_hash_id || '').trim();\n  if (hash) stateMap[hash] = item.json;\n}\n\n// Get today in YYYY-MM-DD (Asia/Jakarta UTC+7)\nconst now = new Date();\nconst jakartaOffset = 7 * 60;\nconst utc = now.getTime() + (now.getTimezoneOffset() * 60000);\nconst jakartaTime = new Date(utc + (jakartaOffset * 60000));\nconst todayStr = jakartaTime.getFullYear() + '-' +\n  String(jakartaTime.getMonth() + 1).padStart(2, '0') + '-' +\n  String(jakartaTime.getDate()).padStart(2, '0');\n\nconst results = [];\nfor (const item of allParsed) {\n  const hash = item.json.event_hash_id;\n  if (!stateMap[hash]) continue;\n  const startDt = item.json.start_datetime || '';\n  if (!startDt.startsWith(todayStr)) continue;\n  const stateData = stateMap[hash];\n  results.push({ json: {\n    ...item.json,\n    calendar_link: stateData.calendar_link || ''\n  }});\n}\nreturn results;"
+      },
+      "id": "b1b2c3d4-0005-4000-8000-000000000005",
+      "name": "Filter Today + Already Sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        0
+      ],
+      "notes": "INNER JOIN with state sheet + filter today's date"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-check-today",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": "0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1b2c3d4-0006-4000-8000-000000000006",
+      "name": "Has Today Events?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID_HERE",
+        "text": "={{ \n(function() {\n  const e = (s) => s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : '';\n  const seminarType = e($json.seminar_type);\n  const nama = e($json.nama);\n  const nim = e($json.nim);\n  const judul = e($json.judul);\n  const hari = e($json.hari);\n  const tanggal = e($json.tanggal);\n  const jam = e($json.jam);\n  const ruangan = e($json.ruangan);\n  const penguji1 = e($json.penguji1);\n  const penguji2 = e($json.penguji2);\n  const pembimbing1 = e($json.pembimbing1);\n  const pembimbing2 = e($json.pembimbing2);\n  const calLink = $json.calendar_link || '';\n\n  let msg = '🔔 <b>REMINDER: SEMINAR HARI INI</b>' + '\\n' +\n    '━━━━━━━━━━━━━━━━━━━━━━' + '\\n\\n' +\n    '📢 <b>' + seminarType.toUpperCase() + '</b>' + '\\n\\n' +\n    '👤 <b>Nama:</b> ' + nama + '\\n' +\n    '🆔 <b>NIM:</b> ' + nim + '\\n' +\n    '📝 <b>Judul:</b> ' + judul + '\\n\\n' +\n    '📅 <b>Hari/Tanggal:</b> ' + hari + ', ' + tanggal + '\\n' +\n    '🕐 <b>Jam:</b> ' + jam + ' WIB' + '\\n' +\n    '📍 <b>Ruangan:</b> ' + (ruangan || 'TBA') + '\\n\\n' +\n    '👨‍🏫 <b>Penguji 1:</b> ' + penguji1 + '\\n';\n  if (penguji2) msg += '👩‍🏫 <b>Penguji 2:</b> ' + penguji2 + '\\n';\n  msg += '\\n👨‍💼 <b>Pembimbing 1:</b> ' + pembimbing1 + '\\n';\n  if (pembimbing2) msg += '👩‍💼 <b>Pembimbing 2:</b> ' + pembimbing2 + '\\n';\n  if (calLink) msg += '\\n📎 <a href=\"' + calLink + '\">Buka Undangan Google Calendar</a>\\n';\n  msg += '\\n<i>⏰ Pengingat otomatis via n8n</i>';\n  return msg;\n})()\n}}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_notification": false
+        }
+      },
+      "id": "b1b2c3d4-0008-4000-8000-000000000008",
+      "name": "Telegram Reminder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1820,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot API - CONFIGURE ME"
+        }
+      },
+      "notes": "REMINDER format — different from main broadcast"
+    },
+    {
+      "parameters": {},
+      "id": "b1b2c3d4-0010-4000-8000-000000000010",
+      "name": "No Today Events (Skip)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1820,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "b1b2c3d4-0013-4000-8000-000000000013",
+      "name": "Done Processing Source",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2080,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (Morning Reminder)": {
+      "main": [
+        [
+          {
+            "node": "Config Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config Sources": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Sources": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Fetch CSV (HTTP Request)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read State Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch CSV (HTTP Request)": {
+      "main": [
+        [
+          {
+            "node": "Parse & Transform Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Transform Data": {
+      "main": [
+        [
+          {
+            "node": "Filter Today + Already Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read State Sheet": {
+      "main": [
+        [
+          {
+            "node": "Filter Today + Already Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Today + Already Sent": {
+      "main": [
+        [
+          {
+            "node": "Has Today Events?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Today Events?": {
+      "main": [
+        [
+          {
+            "node": "Telegram Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Today Events (Skip)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Reminder": {
+      "main": [
+        [
+          {
+            "node": "Done Processing Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Today Events (Skip)": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Done Processing Source": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "Asia/Jakarta"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "seminar",
+      "id": "tag-seminar"
+    },
+    {
+      "name": "reminder",
+      "id": "tag-reminder"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-02-24T03:24:31.715Z",
+  "versionId": "1"
+}
